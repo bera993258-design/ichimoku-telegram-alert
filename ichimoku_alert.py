@@ -4,7 +4,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-SYMBOL = "BTCUSDT"
+PAIR = "B-BTC_INR"
 INTERVAL = "5m"
 LIMIT = 100
 STATE_FILE = Path("alert_state.json")
@@ -12,14 +12,27 @@ STATE_FILE = Path("alert_state.json")
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-url = "https://api.binance.com/api/v3/klines?symbol=" + SYMBOL + "&interval=" + INTERVAL + "&limit=" + str(LIMIT)
+url = (
+    "https://public.coindcx.com/market_data/candles"
+    "?pair=" + PAIR
+    + "&interval=" + INTERVAL
+    + "&limit=" + str(LIMIT)
+)
 
-request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+request = urllib.request.Request(
+    url,
+    headers={"User-Agent": "Mozilla/5.0"}
+)
 
 with urllib.request.urlopen(request, timeout=30) as response:
-    candles = json.loads(response.read().decode("utf-8"))
+    raw_candles = json.loads(response.read().decode("utf-8"))
 
-closed_candles = candles[:-1]
+if not isinstance(raw_candles, list) or len(raw_candles) < 60:
+    raise RuntimeError("CoinDCX candle data not received")
+
+raw_candles.sort(key=lambda candle: int(candle[0]))
+
+closed_candles = raw_candles[:-1]
 
 highs = [float(candle[2]) for candle in closed_candles]
 lows = [float(candle[3]) for candle in closed_candles]
@@ -53,15 +66,38 @@ if signal != "":
         state = json.loads(STATE_FILE.read_text())
 
     if state.get("last_alert_candle") != candle_id:
-        text = "ICHIMOKU_ALERT | " + SYMBOL + " | " + INTERVAL + " | " + signal + " | CLOSE=" + str(closes[last_index])
-        data = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text}).encode()
+        text = (
+            "ICHIMOKU ALERT | "
+            + PAIR
+            + " | "
+            + INTERVAL
+            + " | "
+            + signal
+            + " | CLOSE="
+            + str(closes[last_index])
+        )
 
-        request = urllib.request.Request(
-            "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage",
+        data = urllib.parse.urlencode(
+            {"chat_id": CHAT_ID, "text": text}
+        ).encode("utf-8")
+
+        telegram_url = (
+            "https://api.telegram.org/bot"
+            + BOT_TOKEN
+            + "/sendMessage"
+        )
+
+        telegram_request = urllib.request.Request(
+            telegram_url,
             data=data
         )
 
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(
+            telegram_request,
+            timeout=30
+        ) as response:
             response.read()
 
-        STATE_FILE.write_text(json.dumps({"last_alert_candle": candle_id}))
+        STATE_FILE.write_text(
+            json.dumps({"last_alert_candle": candle_id})
+        )

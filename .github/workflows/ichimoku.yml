@@ -26,6 +26,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python ichimoku_alert.py
+              - name: Send Telegram test message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "import os, urllib.parse, urllib.request; data=urllib.parse.urlencode({'chat_id': os.environ['TELEGRAM_CHAT_ID'], 'text': 'TEST: Telegram alert is working'}).encode(); url='https://api.telegram.org/bot'+os.environ['TELEGRAM_BOT_TOKEN']+'/sendMessage'; urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=30).read()"
 
       - name: Save last alert candle
         run: |

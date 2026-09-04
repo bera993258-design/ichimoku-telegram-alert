@@ -4,7 +4,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-PAIR = "B-BTC_INR"
+PAIR = "BTC-USDT"
 INTERVAL = "5m"
 LIMIT = 100
 STATE_FILE = Path("alert_state.json")
@@ -13,9 +13,9 @@ BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 url = (
-    "https://public.coindcx.com/market_data/candles"
-    "?pair=" + PAIR
-    + "&interval=" + INTERVAL
+    "https://www.okx.com/api/v5/market/candles"
+    "?instId=" + PAIR
+    + "&bar=" + INTERVAL
     + "&limit=" + str(LIMIT)
 )
 
@@ -25,18 +25,29 @@ request = urllib.request.Request(
 )
 
 with urllib.request.urlopen(request, timeout=30) as response:
-    raw_candles = json.loads(response.read().decode("utf-8"))
+    result = json.loads(response.read().decode("utf-8"))
 
-if not isinstance(raw_candles, list) or len(raw_candles) < 60:
-    raise RuntimeError("CoinDCX candle data not received")
+if result.get("code") != "0":
+    raise RuntimeError("OKX API error: " + result.get("msg", "unknown"))
+
+raw_candles = result.get("data", [])
+
+if len(raw_candles) < 60:
+    raise RuntimeError("Not enough candle data from OKX")
 
 raw_candles.sort(key=lambda candle: int(candle[0]))
 
-closed_candles = raw_candles[:-1]
+closed_candles = [
+    candle for candle in raw_candles
+    if candle[-1] == "1"
+]
 
-highs = [float(candle[2]) for candle in closed_candles]
-lows = [float(candle[3]) for candle in closed_candles]
-closes = [float(candle[4]) for candle in closed_candles]
+if len(closed_candles) < 60:
+    raise RuntimeError("Not enough closed candles from OKX")
+
+highs = [float(candle[3]) for candle in closed_candles]
+lows = [float(candle[4]) for candle in closed_candles]
+closes = [float(candle[4 - 2]) for candle in closed_candles]
 times = [int(candle[0]) for candle in closed_candles]
 
 def midpoint(index, period):

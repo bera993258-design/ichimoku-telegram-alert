@@ -5,7 +5,7 @@ import urllib.request
 from pathlib import Path
 
 PAIR = "BTC-USDT"
-INTERVAL = "5m"
+INTERVAL = "15m"
 LIMIT = 120
 
 CONVERSION_PERIOD = 9

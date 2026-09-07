@@ -4,11 +4,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-PAIR = [
-    "BTC-USDT",
-    "SOL-USDT",
-    "XAU-USDT",
-    "ETH-USDT"]
+PAIR = "BTC-USDT"
 INTERVAL = "15m"
 LIMIT = 120
 

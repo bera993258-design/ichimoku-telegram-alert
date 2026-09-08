@@ -8,10 +8,10 @@ from pathlib import Path
 # CONFIG
 # -------------------------
 PAIRS = [
-    "BTC-USDT",
-    "SOL-USDT",
-    "ETH-USDT",
-    "XAU-USDT",
+    "B-BTC_USDT",
+    "B-ETH_USDT",
+    "B-SOL_USDT",
+    "B-XAU_USDT",
 ]
 
 INTERVAL = "15m"
@@ -21,7 +21,7 @@ CONVERSION_PERIOD = 9
 BASE_PERIOD = 27
 SPAN_B_PERIOD = 54
 LAGGING_PERIOD = 27
-LEADING_SHIFT = 27
+LEADING_SHIFT = 27  # 26 → 27
 
 STATE_FILE = Path("alert_state.json")
 
@@ -34,9 +34,9 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def fetch_candles(pair: str):
     url = (
-        "https://www.okx.com/api/v5/market/candles"
-        + "?instId=" + pair
-        + "&bar=" + INTERVAL
+        "https://public.coindcx.com/market_data/candles"
+        + "?pair=" + pair
+        + "&interval=" + INTERVAL
         + "&limit=" + str(LIMIT)
     )
 
@@ -48,25 +48,24 @@ def fetch_candles(pair: str):
     with urllib.request.urlopen(request, timeout=30) as response:
         result = json.loads(response.read().decode("utf-8"))
 
-    if result.get("code") != "0":
-        raise RuntimeError(f"OKX API error for {pair}: " + result.get("msg", "unknown"))
-
-    raw_candles = result.get("data", [])
-    raw_candles.sort(key=lambda candle: int(candle[0]))
-
-    closed_candles = [
-        candle for candle in raw_candles
-        if candle[-1] == "1"
-    ]
-
-    if len(closed_candles) < SPAN_B_PERIOD + 2:
-        # এই pair-এর জন্য skip, error না তুলে
+    # CoinDCX response: {"candles": [[ts, o, h, l, c], ...]}
+    raw_candles = result.get("candles", [])
+    if not raw_candles:
         return None
 
-    highs = [float(candle[2]) for candle in closed_candles]
-    lows = [float(candle[3]) for candle in closed_candles]
-    closes = [float(candle[4]) for candle in closed_candles]
-    times = [int(candle[0]) for candle in closed_candles]
+    raw_candles.sort(key=lambda candle: candle[0])
+
+    # CoinDCX সব candle-ই closed ধরে নেওয়া যেতে পারে
+    closed_candles = raw_candles
+
+    # Span B + shift + buffer
+    if len(closed_candles) < SPAN_B_PERIOD + LEADING_SHIFT + 2:
+        return None
+
+    highs = [candle[2] for candle in closed_candles]
+    lows = [candle[3] for candle in closed_candles]
+    closes = [candle[4] for candle in closed_candles]
+    times = [candle[0] for candle in closed_candles]
 
     return highs, lows, closes, times
 
@@ -78,19 +77,32 @@ def midpoint(highs, lows, index, period):
 def check_and_alert(pair: str, highs, lows, closes, times, state: dict):
     last_index = len(closes) - 1
 
-    tenkan_now = midpoint(highs, lows, last_index, CONVERSION_PERIOD)
-    kijun_now = midpoint(highs, lows, last_index, BASE_PERIOD)
-    span_a_now = (tenkan_now + kijun_now) / 2
-    span_b_now = midpoint(highs, lows, last_index, SPAN_B_PERIOD)
+    # ভবিষ্যতের index: last + LEADING_SHIFT
+    future_index = last_index + LEADING_SHIFT
 
-    tenkan_old = midpoint(highs, lows, last_index - 1, CONVERSION_PERIOD)
-    kijun_old = midpoint(highs, lows, last_index - 1, BASE_PERIOD)
-    span_a_old = (tenkan_old + kijun_old) / 2
-    span_b_old = midpoint(highs, lows, last_index - 1, SPAN_B_PERIOD)
+    if future_index >= len(closes):
+        return
 
-    if span_a_old <= span_b_old and span_a_now > span_b_now:
+    # ভবিষ্যতের candle-এর জন্য Span A ও B
+    tenkan_future = midpoint(highs, lows, future_index, CONVERSION_PERIOD)
+    kijun_future = midpoint(highs, lows, future_index, BASE_PERIOD)
+    span_a_future = (tenkan_future + kijun_future) / 2
+    span_b_future = midpoint(highs, lows, future_index, SPAN_B_PERIOD)
+
+    # আগের candle-এর ভবিষ্যতের index (future_index - 1)
+    prev_future_index = future_index - 1
+    if prev_future_index < SPAN_B_PERIOD:
+        return
+
+    tenkan_prev = midpoint(highs, lows, prev_future_index, CONVERSION_PERIOD)
+    kijun_prev = midpoint(highs, lows, prev_future_index, BASE_PERIOD)
+    span_a_prev = (tenkan_prev + kijun_prev) / 2
+    span_b_prev = midpoint(highs, lows, prev_future_index, SPAN_B_PERIOD)
+
+    # Crossover check (ভবিষ্যতের 27-তম candle-এর জন্য)
+    if span_a_prev <= span_b_prev and span_a_future > span_b_future:
         signal = "BULLISH_KUMO_TWIST: LEADING_SPAN_A_CROSSED_ABOVE_LEADING_SPAN_B"
-    elif span_a_old >= span_b_old and span_a_now < span_b_now:
+    elif span_a_prev >= span_b_prev and span_a_future < span_b_future:
         signal = "BEARISH_KUMO_TWIST: LEADING_SPAN_A_CROSSED_BELOW_LEADING_SPAN_B"
     else:
         signal = ""
@@ -102,7 +114,6 @@ def check_and_alert(pair: str, highs, lows, closes, times, state: dict):
     pair_key = pair + "_" + INTERVAL
 
     if state.get(pair_key) == candle_id:
-        # এই candle-এ আগেই alert পাঠানো হয়েছে
         return
 
     text = (
@@ -115,13 +126,13 @@ def check_and_alert(pair: str, highs, lows, closes, times, state: dict):
         + " | CLOSE="
         + str(closes[last_index])
         + " | TENKAN_9="
-        + str(tenkan_now)
+        + str(tenkan_future)
         + " | KIJUN_27="
-        + str(kijun_now)
+        + str(kijun_future)
         + " | SPAN_A="
-        + str(span_a_now)
+        + str(span_a_future)
         + " | SPAN_B_54="
-        + str(span_b_now)
+        + str(span_b_future)
         + " | SHIFT=27"
     )
 
@@ -160,8 +171,6 @@ for pair in PAIRS:
     try:
         data = fetch_candles(pair)
     except Exception as e:
-        # একটা pair fail করলে অন্যগুলো যেন চালু থাকে
-        # চাইলে এখানে logging / print করা যেতে পারে (GitHub Actions log-এ দেখা যাবে)
         continue
 
     if data is None:
